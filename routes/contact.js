@@ -1,29 +1,41 @@
 const express = require('express');
 const ContactMessage = require('../models/ContactMessage');
 const authMiddleware = require('../middleware/auth');
-const sendContactEmail = require('../utils/mailer');
 const router = express.Router();
 
-// Public: Submit contact form (sends email + saves to DB)
+// Public: Submit contact form (saves to DB, tries email but doesn't block)
 router.post('/', async (req, res) => {
   try {
     const { name, email, subject, message } = req.body;
     
-    // Save to database (for admin panel)
+    // Validate required fields
+    if (!name || !email || !subject || !message) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+    
+    // 1. Save to database (critical)
     const newMessage = new ContactMessage({ name, email, subject, message });
     await newMessage.save();
+    console.log('Message saved to DB, id:', newMessage._id);
     
-    // Send email notifications
-    await sendContactEmail({ name, email, subject, message });
+    // 2. Attempt to send email (non‑blocking)
+    try {
+      const sendContactEmail = require('../utils/mailer');
+      await sendContactEmail({ name, email, subject, message });
+      console.log('Email sent successfully');
+    } catch (emailErr) {
+      console.error('Email error (non‑blocking):', emailErr.message);
+      // Do not fail the response
+    }
     
-    res.status(201).json({ message: 'Message sent successfully' });
+    res.status(201).json({ message: 'Thank you! Your message has been received.' });
   } catch (error) {
-    console.error('Contact form error:', error);
-    res.status(500).json({ message: 'Failed to send message. Please try again.' });
+    console.error('Contact form critical error:', error);
+    res.status(500).json({ message: 'Server error. Could not save your message.' });
   }
 });
 
-// Admin: Get all messages
+// Admin routes (unchanged)...
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const messages = await ContactMessage.find().sort({ createdAt: -1 });
@@ -33,7 +45,6 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// Admin: Mark message as read
 router.put('/:id/read', authMiddleware, async (req, res) => {
   try {
     const message = await ContactMessage.findByIdAndUpdate(
@@ -47,7 +58,6 @@ router.put('/:id/read', authMiddleware, async (req, res) => {
   }
 });
 
-// Admin: Delete message
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     await ContactMessage.findByIdAndDelete(req.params.id);
